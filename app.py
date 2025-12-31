@@ -46,44 +46,55 @@ def chunk_text(text, size=800):
     return [" ".join(words[i:i+size]) for i in range(0, len(words), size)]
 
 # ---------------- ANALYSIS ----------------
-def analyze_bill(text):
-    chunks = chunk_text(text)
-    summaries = []
+# ---------- SECTION EXTRACTOR ----------
+def extract_sections(text):
+    sections = {
+        "sector": "",
+        "summary": "",
+        "impact": ""
+    }
 
-    for chunk in chunks[:5]:
-        res = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{
-                "role": "user",
-                "content": f"Summarize this Indian Parliament Bill section:\n{chunk}"
-            }],
-            temperature=0.3
-        )
-        summaries.append(res.choices[0].message.content)
+    current = None
+    for line in text.splitlines():
+        l = line.lower()
 
-    combined = "\n".join(summaries)
+        if "sector" in l:
+            current = "sector"
+        elif "summary" in l:
+            current = "summary"
+        elif "short-term impact" in l or "medium-term impact" in l or "long-term impact" in l or "impact" in l:
+            current = "impact"
 
-    final = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[{
-            "role": "user",
-            "content": f"""
-Create a structured policy analysis with:
-1. Sector
-2. Objective
-3. Summary
-4. Short-term Impact
-5. Medium-term Impact
-6. Long-term Impact
+        if current:
+            sections[current] += line + "\n"
 
-Text:
-{combined}
-"""
-        }],
-        temperature=0.3
+    return sections
+
+
+# ---------- DISPLAY RESULTS ----------
+if st.session_state.analysis:
+    sections = extract_sections(st.session_state.analysis)
+
+    tab1, tab2, tab3 = st.tabs(["📊 Sector", "📝 Summary", "⚖️ Impact"])
+
+    with tab1:
+        st.subheader("📊 Sector Analysis")
+        st.write(sections["sector"])
+
+    with tab2:
+        st.subheader("📝 Bill Summary")
+        st.write(sections["summary"])
+
+    with tab3:
+        st.subheader("⚖️ Impact Assessment")
+        st.write(sections["impact"])
+
+    st.download_button(
+        "📥 Download Full Summary as PDF",
+        make_pdf(st.session_state.analysis),
+        file_name="parliament_bill_summary.pdf",
+        mime="application/pdf"
     )
-
-    return final.choices[0].message.content
 
 # ---------------- PDF DOWNLOAD ----------------
 def make_pdf(text):
