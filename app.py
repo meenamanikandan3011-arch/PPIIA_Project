@@ -5,11 +5,7 @@ from groq import Groq
 from fpdf import FPDF
 
 # ---------------- PAGE CONFIG ----------------
-st.set_page_config(
-    page_title="Parliament Bill Auditor",
-    layout="wide"
-)
-
+st.set_page_config(page_title="Parliament Bill Auditor", layout="wide")
 st.markdown("## 🏛️ Parliament Bill Auditor")
 st.caption("Upload Indian Parliament Bills and get AI-powered policy analysis")
 
@@ -24,7 +20,7 @@ client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 st.session_state.setdefault("analysis", "")
 st.session_state.setdefault("bill_text", "")
 
-# ---------------- PDF TEXT EXTRACTION ----------------
+# ---------------- PDF EXTRACTION ----------------
 def extract_text(pdf_file):
     pdf_file.seek(0)
     doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
@@ -37,64 +33,76 @@ def extract_text(pdf_file):
 def clean_text(text):
     text = re.sub(r"\n+", "\n", text)
     text = re.sub(r"\(Interruptions\)", "", text)
-    text = re.sub(r"\d+\s*hrs", "", text)
     return text.strip()
 
 # ---------------- CHUNKING ----------------
-def chunk_text(text, size=800):
+def chunk_text(text, size=900):
     words = text.split()
     return [" ".join(words[i:i+size]) for i in range(0, len(words), size)]
 
-# ---------------- ANALYSIS ----------------
-# ---------- SECTION EXTRACTOR ----------
-def extract_sections(text):
-    sections = {
-        "sector": "",
-        "summary": "",
-        "impact": ""
-    }
+# ---------------- AI ANALYSIS ----------------
+def analyze_bill(text):
+    chunks = chunk_text(text)
+    partial = []
 
-    current = None
-    for line in text.splitlines():
-        l = line.lower()
+    for chunk in chunks[:5]:
+        res = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{
+                "role": "user",
+                "content": f"Summarize this Indian Parliament Bill section:\n{chunk}"
+            }],
+            temperature=0.3
+        )
+        partial.append(res.choices[0].message.content)
 
-        if "sector" in l:
-            current = "sector"
-        elif "summary" in l:
-            current = "summary"
-        elif "short-term impact" in l or "medium-term impact" in l or "long-term impact" in l or "impact" in l:
-            current = "impact"
+    combined = "\n".join(partial)
 
-        if current:
-            sections[current] += line + "\n"
+    final = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{
+            "role": "user",
+            "content": """
+STRICTLY use the following format:
 
-    return sections
+### SECTOR
+(one line)
 
+### OBJECTIVE
+- bullets
 
-# ---------- DISPLAY RESULTS ----------
-if st.session_state.analysis:
-    sections = extract_sections(st.session_state.analysis)
+### SUMMARY
+- bullets
 
-    tab1, tab2, tab3 = st.tabs(["📊 Sector", "📝 Summary", "⚖️ Impact"])
+### IMPACT
+Citizens:
+- bullets
 
-    with tab1:
-        st.subheader("📊 Sector Analysis")
-        st.write(sections["sector"])
+Businesses:
+- bullets
 
-    with tab2:
-        st.subheader("📝 Bill Summary")
-        st.write(sections["summary"])
+Government:
+- bullets
 
-    with tab3:
-        st.subheader("⚖️ Impact Assessment")
-        st.write(sections["impact"])
-
-    st.download_button(
-        "📥 Download Full Summary as PDF",
-        make_pdf(st.session_state.analysis),
-        file_name="parliament_bill_summary.pdf",
-        mime="application/pdf"
+Text:
+""" + combined
+        }],
+        temperature=0.3
     )
+    return final.choices[0].message.content
+
+# ---------------- SECTION PARSER (IMPORTANT) ----------------
+def parse_sections(text):
+    def get_section(title):
+        pattern = rf"### {title}(.*?)(###|$)"
+        match = re.search(pattern, text, re.S | re.I)
+        return match.group(1).strip() if match else "Not available"
+
+    return {
+        "sector": get_section("SECTOR"),
+        "summary": get_section("SUMMARY"),
+        "impact": get_section("IMPACT")
+    }
 
 # ---------------- PDF DOWNLOAD ----------------
 def make_pdf(text):
@@ -108,31 +116,35 @@ def make_pdf(text):
 # ---------------- FILE UPLOAD ----------------
 uploaded = st.file_uploader("📄 Upload Parliament Bill (PDF)", type="pdf")
 
-if uploaded:
-    if st.button("🚀 Generate Analysis"):
-        with st.spinner("Analyzing bill..."):
-            raw = extract_text(uploaded)
-            cleaned = clean_text(raw)
-            st.session_state.bill_text = cleaned
-            st.session_state.analysis = analyze_bill(cleaned)
+if uploaded and st.button("🚀 Generate Analysis"):
+    with st.spinner("Analyzing bill..."):
+        raw = extract_text(uploaded)
+        cleaned = clean_text(raw)
+        st.session_state.bill_text = cleaned
+        st.session_state.analysis = analyze_bill(cleaned)
 
 # ---------------- DISPLAY ----------------
 if st.session_state.analysis:
+    sections = parse_sections(st.session_state.analysis)
+
     tab1, tab2, tab3 = st.tabs(["📊 Sector", "📝 Summary", "⚖️ Impact"])
 
     with tab1:
-        st.write(st.session_state.analysis)
+        st.subheader("📊 Sector Analysis")
+        st.write(sections["sector"])
 
     with tab2:
-        st.write(st.session_state.analysis)
+        st.subheader("📝 Bill Summary")
+        st.write(sections["summary"])
 
     with tab3:
-        st.write(st.session_state.analysis)
+        st.subheader("⚖️ Impact Analysis")
+        st.write(sections["impact"])
 
     st.download_button(
-        "📥 Download Summary PDF",
+        "📥 Download Full Summary PDF",
         make_pdf(st.session_state.analysis),
-        "bill_summary.pdf",
+        "parliament_bill_summary.pdf",
         "application/pdf"
     )
 
@@ -140,16 +152,15 @@ if st.session_state.analysis:
 st.markdown("---")
 st.subheader("💬 Ask AI about this Bill")
 
-q = st.text_input("Ask a question")
+question = st.text_input("Ask a question")
 
-if st.button("Ask"):
-    if q:
-        res = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{
-                "role": "user",
-                "content": f"Bill:\n{st.session_state.bill_text}\n\nQuestion:\n{q}"
-            }],
-            temperature=0.3
-        )
-        st.success(res.choices[0].message.content)
+if st.button("Ask AI") and question:
+    res = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{
+            "role": "user",
+            "content": f"Bill:\n{st.session_state.bill_text}\n\nQuestion:\n{question}"
+        }],
+        temperature=0.3
+    )
+    st.success(res.choices[0].message.content)
